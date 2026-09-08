@@ -1,3 +1,5 @@
+import 'dart:async';
+
 // ---------- 1. Cover ----------
 enum Cover {
   thirdParty,
@@ -26,7 +28,7 @@ class QuoteRequest {
 //       copyWith
   const QuoteRequest({
   required this.make,
-  required this.model,
+  this.model,
   required this.year,
   required this.driverAge,
   required this.cover,
@@ -104,64 +106,86 @@ class Quote {
 // TODO: sealed class QuoteState with Idle / Loading / Loaded(quote) / Failed(message)
 //       String describe(QuoteState s) using an exhaustive switch expression
 sealed class QuoteState {}
-class Idle extends QuoteState {}
+class QuoteIdle extends QuoteState {}
 
-class Loading extends QuoteState {}
+class QuoteLoading extends QuoteState {}
 
-class Loaded extends QuoteState {
+class QuoteLoaded extends QuoteState {
   final Quote quote;
 
-  Loaded(this.quote);
+  QuoteLoaded(this.quote);
 }
 
-class Failed extends QuoteState {
+class QuoteFailed extends QuoteState {
   final String message;
 
-  Failed(this.message);
+  QuoteFailed(this.message);
 }
+
+// LAB 3
+abstract interface class QuoteService{
+  Future<Quote> getQuote(QuoteRequest r);
+}
+
+class FakeQuoteService implements QuoteService {
+  @override
+  Future<Quote> getQuote(QuoteRequest r) async {
+    await Future.delayed(const Duration(milliseconds: 1500));
+
+    if (r.year < 2000) {
+      throw Exception('Vehicle too old to insure');
+    }
+
+    return Quote(
+      id: 'q-${r.hashCode}',
+      premium: calculatePremium(r),
+    );
+  }
+}
+
+Future<void> runOnce(QuoteService s, QuoteRequest r) async {
+  try {
+    final q = await s.getQuote(r).timeout(const Duration(seconds: 3));
+    print('OK ${q.display}');
+  } on TimeoutException {
+    print('Timed out');
+  } catch (e) {
+    print('Failed: $e');
+  }
+}
+
+Stream<QuoteState> quoteStates(QuoteService s, QuoteRequest r) async* {
+  yield QuoteLoading();
+  try {
+    yield QuoteLoaded(await s.getQuote(r));
+  } catch (e) {
+    yield QuoteFailed(e.toString());
+  }
+}
+
+void main() async {
+  final svc = FakeQuoteService();
+  const ok = QuoteRequest(make: 'VW', year: 2020, driverAge: 30, cover: Cover.comprehensive);
+
+  await runOnce(svc, ok);
+
+  await for (final st in quoteStates(svc, ok)) {
+    print(describe(st));
+  }
+  await for (final st in quoteStates(svc, ok.copyWith(year: 1998))) {
+    print(describe(st));
+  }
+
+  final sw = Stopwatch()..start();
+  await Future.wait([svc.getQuote(ok), svc.getQuote(ok), svc.getQuote(ok)]);
+  print('3 parallel quotes in ${sw.elapsedMilliseconds} ms');   // ~1500, not 4500
+}
+
 
 String describe(QuoteState s) => switch (s) {
-  Idle() => 'Fill in the form',
-  Loading() => 'Calculating…',
-  Loaded(:final quote) => 'Premium ${quote.display}',
-  Failed(:final message) => 'Error: $message',
+  QuoteIdle() => 'Fill in the form',
+  QuoteLoading() => 'Calculating…',
+  QuoteLoaded(:final quote) => 'Premium ${quote.display}',
+  QuoteFailed(:final message) => 'Error: $message',
 };
 
-void main() {
-  // 1st request
-  final request1 = QuoteRequest(
-    make: 'VW',
-    model: 'null',
-    year: 2020,
-    driverAge: 30,
-    cover: Cover.comprehensive,
-  );
-
-  // 2nd request
-  final request2 = request1.copyWith(
-    driverAge: 22,
-  );
-
-  // third request
-  final request3 = request1.copyWith(
-    year: 2012,
-    cover: Cover.thirdPartyFireTheft,
-  );
-  
-  // TODO: build three requests with copyWith, print each premium
-  // TODO: print describe() for all four states
-  print('${request1.make} ${request1.year} → R ${calculatePremium(request1).toStringAsFixed(2)}');
-  
-  print('${request2.make} ${request2.year} → R ${calculatePremium(request2).toStringAsFixed(2)}');
-  
-  print('${request3.make} ${request3.year} → R ${calculatePremium(request3).toStringAsFixed(2)}');
-
-  print(describe(Idle()));
-  print(describe(Loading()));
-  print(describe(Loaded(
-    Quote(id: 'Q001', premium: 1000),
-  )));
-  
-  print(describe(Failed('too old')));
-
-}
